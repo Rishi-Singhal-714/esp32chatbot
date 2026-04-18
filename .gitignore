@@ -1,0 +1,17 @@
+# Environment variables - NEVER push these
+.env
+.env.local
+.env.local
+.env.production
+.env.*
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
