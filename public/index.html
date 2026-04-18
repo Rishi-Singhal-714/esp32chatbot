@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ESP32 Assistant</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: #0f1117;
+        color: #e0e0e0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 32px 16px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 32px;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #4caf50;
+        animation: blink 2s infinite;
+      }
+
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+      }
+
+      header h1 {
+        font-size: 1.2rem;
+        color: #fff;
+        font-weight: 500;
+      }
+
+      #feed {
+        width: 100%;
+        max-width: 600px;
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .card {
+        background: #1a1d27;
+        border: 1px solid #2a2d3a;
+        border-radius: 14px;
+        padding: 18px 20px;
+        animation: fadeIn 0.3s ease;
+      }
+
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+
+      .label {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 6px;
+      }
+
+      .label.user { color: #4f8ef7; }
+      .label.bot  { color: #4caf50; }
+
+      .text {
+        font-size: 1rem;
+        line-height: 1.6;
+        color: #e0e0e0;
+      }
+
+      .time {
+        font-size: 0.72rem;
+        color: #444;
+        margin-top: 8px;
+      }
+
+      #empty {
+        color: #444;
+        font-size: 0.9rem;
+        margin-top: 60px;
+        text-align: center;
+        line-height: 1.8;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="dot"></div>
+      <h1>ESP32 Voice Assistant</h1>
+    </header>
+
+    <div id="feed">
+      <p id="empty">Waiting for ESP32...<br>Press the button on your device to speak.</p>
+    </div>
+
+    <script>
+      const API = "";        // same origin on Vercel
+      const feed = document.getElementById("feed");
+      const empty = document.getElementById("empty");
+      let lastTs = 0;
+
+      async function poll() {
+        try {
+          const res = await fetch(`${API}/api/message`);
+          const { messages } = await res.json();
+
+          const newMsgs = messages.filter((m) => m.ts > lastTs);
+          if (newMsgs.length === 0) return;
+
+          if (empty) empty.remove();
+
+          newMsgs.forEach((m) => {
+            lastTs = Math.max(lastTs, m.ts);
+
+            const card = document.createElement("div");
+            card.className = "card";
+
+            const t = new Date(m.ts).toLocaleTimeString();
+
+            card.innerHTML = `
+              <div class="label user">You said</div>
+              <div class="text">${esc(m.user)}</div>
+              <div class="label bot" style="margin-top:14px">Assistant replied</div>
+              <div class="text">${esc(m.bot)}</div>
+              <div class="time">${t}</div>`;
+
+            feed.appendChild(card);
+            card.scrollIntoView({ behavior: "smooth" });
+          });
+        } catch (_) {}
+      }
+
+      function esc(s) {
+        return String(s ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      poll();
+      setInterval(poll, 2000);
+    </script>
+  </body>
+</html>
