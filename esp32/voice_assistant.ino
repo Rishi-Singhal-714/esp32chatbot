@@ -48,7 +48,7 @@ const char* WIFI_SSID = "YOUR_WIFI_SSID";
 const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 
 // ── Vercel backend ────────────────────────────────────────────────────────────
-const char* SERVER = "https://vercel-esp.co.ina";
+const char* SERVER = "https://esp32chatbot.vercel.app";
 
 // ── Pins ──────────────────────────────────────────────────────────────────────
 #define MIC_PIN      34          // GPIO 34 = ADC1_CH6 (input-only, perfect for mic)
