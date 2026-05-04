@@ -6,7 +6,7 @@
  * │  INMP441 Microphone                     │
  * │  VDD  →  3.3V                           │
  * │  GND  →  GND                            │
- * │  SCK  →  GPIO 35                        │
+ * │  SCK  →  GPIO 14  ← move wire here      │
  * │  WS   →  GPIO 32                        │
  * │  SD   →  GPIO 33                        │
  * │  L/R  →  GND                            │
@@ -41,7 +41,7 @@ const char* SERVER = "https://esp32chatbot.vercel.app";
 
 // ── INMP441 — I2S port 0 ──────────────────────────────────────────────────────
 #define MIC_PORT     I2S_NUM_0
-#define MIC_SCK_PIN  35
+#define MIC_SCK_PIN  14   // GPIO 35 is input-only — move wire to GPIO 14
 #define MIC_WS_PIN   32
 #define MIC_SD_PIN   33
 
@@ -103,6 +103,7 @@ void micStart() {
   cfg.use_apll             = false;
 
   i2s_pin_config_t pins = {};
+  pins.mck_io_num   = I2S_PIN_NO_CHANGE;  // INMP441 does not need MCLK
   pins.bck_io_num   = MIC_SCK_PIN;
   pins.ws_io_num    = MIC_WS_PIN;
   pins.data_in_num  = MIC_SD_PIN;
@@ -132,6 +133,7 @@ void spkStart(int rate = 24000) {
   cfg.tx_desc_auto_clear   = true;
 
   i2s_pin_config_t pins = {};
+  pins.mck_io_num   = I2S_PIN_NO_CHANGE;  // MAX98357A does not need MCLK
   pins.bck_io_num   = SPK_BCLK_PIN;
   pins.ws_io_num    = SPK_LRC_PIN;
   pins.data_out_num = SPK_DIN_PIN;
