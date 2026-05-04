@@ -1,40 +1,36 @@
 /*
- * ESP32 Voice Assistant — Direct Mic + Speaker (no external I2S modules)
+ * ESP32-S3 Voice Assistant
+ * INMP441 (I2S Mic) + MAX98357A (I2S Amplifier)
  * ─────────────────────────────────────────────────────────────────────────────
- * Board: ESP32-WROOM-32 (30-pin dev board)
  *
- * Uses the ESP32 built-in ADC (for mic) and built-in DAC (for speaker).
- * NO external modules like INMP441 or MAX98357A needed.
+ * ┌─────────────────────────────────────────┐
+ * │  INMP441 Microphone                     │
+ * │  Pin    →  ESP32-S3                     │
+ * │  VDD    →  3.3V                         │
+ * │  GND    →  GND                          │
+ * │  SCK    →  GPIO 35 (D35)               │
+ * │  WS     →  GPIO 32 (D32)               │
+ * │  SD     →  GPIO 33 (D33)               │
+ * │  L/R    →  GND  (left channel)         │
+ * └─────────────────────────────────────────┘
  *
- * ┌──────────────────────────────────────────────────────────────┐
- * │  MICROPHONE  (electret condenser mic, 2 pins)                │
- * │                                                              │
- * │   Mic (+) ──┬── 10kΩ ── 3.3V                                │
- * │             └── 100nF ── GPIO 34  (D34, ADC1_CH6)           │
- * │   Mic (–) ──── GND                                          │
- * │                                                              │
- * │  The resistor biases the mic. The capacitor removes DC.      │
- * └──────────────────────────────────────────────────────────────┘
+ * ┌─────────────────────────────────────────┐
+ * │  MAX98357A Speaker Amplifier            │
+ * │  Pin    →  ESP32-S3                     │
+ * │  VIN    →  5V (Vin)                     │
+ * │  GND    →  GND                          │
+ * │  BCLK   →  GPIO 26 (D26)               │
+ * │  LRC    →  GPIO 27 (D27)               │
+ * │  DIN    →  GPIO 25 (D25)               │
+ * │  SD     →  GND  (always enabled)       │
+ * └─────────────────────────────────────────┘
  *
- * ┌──────────────────────────────────────────────────────────────┐
- * │  SPEAKER  (small 8Ω or 4Ω speaker)                          │
- * │                                                              │
- * │   GPIO 25 (D25, DAC1) ── 100Ω ── Speaker (+)                │
- * │                                   Speaker (–) ── GND        │
- * │                                                              │
- * │  The 100Ω resistor protects the pin. For louder output       │
- * │  add a small transistor amp or LM386 module between.         │
- * └──────────────────────────────────────────────────────────────┘
- *
- * ┌──────────────────────────────────────────────────────────────┐
- * │  BUTTON                                                      │
- * │   BOOT button (bottom-right, built-in) = GPIO 0              │
- * │   Press once to start recording, recording stops after 3s    │
- * └──────────────────────────────────────────────────────────────┘
+ * BOOT button (GPIO 0) = push to talk
+ * Built-in LED (GPIO 2) = status indicator
  *
  * Arduino IDE:
- *   Board  : ESP32 Dev Module
- *   Library: ArduinoJson by Benoit Blanchon  (install via Library Manager)
+ *   Board   : ESP32S3 Dev Module
+ *   Library : ArduinoJson by Benoit Blanchon
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
@@ -47,25 +43,32 @@
 const char* WIFI_SSID = "YOUR_WIFI_SSID";
 const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 
-// ── Vercel backend ────────────────────────────────────────────────────────────
+// ── Server ────────────────────────────────────────────────────────────────────
 const char* SERVER = "https://esp32chatbot.vercel.app";
 
-// ── Pins ──────────────────────────────────────────────────────────────────────
-#define MIC_PIN      34          // GPIO 34 = ADC1_CH6 (input-only, perfect for mic)
-#define SPK_PIN      25          // GPIO 25 = DAC1
-#define BUTTON_PIN    0          // BOOT button (active LOW)
-#define LED_PIN       2          // Built-in LED
+// ── INMP441 — I2S Port 0 (microphone input) ───────────────────────────────────
+#define MIC_PORT      I2S_NUM_0
+#define MIC_SCK_PIN   35    // SCK  on INMP441
+#define MIC_WS_PIN    32    // WS   on INMP441
+#define MIC_SD_PIN    33    // SD   on INMP441
 
-// ── Recording ─────────────────────────────────────────────────────────────────
-#define SAMPLE_RATE   16000      // Hz — good for speech STT
-#define RECORD_SECS   3
-#define PCM_BYTES     (SAMPLE_RATE * 2 * RECORD_SECS)  // 16-bit mono = 96 000 B
-#define WAV_SIZE      (PCM_BYTES + 44)
+// ── MAX98357A — I2S Port 1 (speaker output) ───────────────────────────────────
+#define SPK_PORT      I2S_NUM_1
+#define SPK_BCLK_PIN  26    // BCLK on MAX98357A
+#define SPK_LRC_PIN   27    // LRC  on MAX98357A
+#define SPK_DIN_PIN   25    // DIN  on MAX98357A
 
-// ADC → I2S uses I2S_NUM_0 (only port that supports built-in ADC/DAC)
-#define I2S_PORT      I2S_NUM_0
+// ── Button & LED ──────────────────────────────────────────────────────────────
+#define BUTTON_PIN     0
+#define LED_PIN        2
 
-static uint8_t wavBuf[WAV_SIZE];   // 96 044 B — fits in ESP32 SRAM
+// ── Recording config ──────────────────────────────────────────────────────────
+#define SAMPLE_RATE    16000
+#define RECORD_SECS    3
+#define PCM_BYTES      (SAMPLE_RATE * 2 * RECORD_SECS)   // 96 000 bytes
+#define WAV_SIZE       (PCM_BYTES + 44)
+
+static uint8_t wavBuf[WAV_SIZE];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WAV header
@@ -77,109 +80,110 @@ void buildWAVHeader() {
   int32_t byteRate  = sr * 2;
   int16_t blockAlign = 2, bps = 16, ch = 1, fmt = 1, fmtSz = 16;
   uint8_t* h = wavBuf;
-  memcpy(h,      "RIFF",  4); memcpy(h +  4, &fileSize,  4);
-  memcpy(h + 8,  "WAVE",  4); memcpy(h + 12, "fmt ",     4);
-  memcpy(h + 16, &fmtSz,  4); memcpy(h + 20, &fmt,       2);
-  memcpy(h + 22, &ch,     2); memcpy(h + 24, &sr,        4);
-  memcpy(h + 28, &byteRate,4); memcpy(h + 32, &blockAlign,2);
+  memcpy(h,       "RIFF", 4); memcpy(h +  4, &fileSize,   4);
+  memcpy(h +  8,  "WAVE", 4); memcpy(h + 12, "fmt ",      4);
+  memcpy(h + 16, &fmtSz,  4); memcpy(h + 20, &fmt,        2);
+  memcpy(h + 22, &ch,     2); memcpy(h + 24, &sr,         4);
+  memcpy(h + 28, &byteRate,4); memcpy(h + 32, &blockAlign, 2);
   memcpy(h + 34, &bps,    2);
-  memcpy(h + 36, "data",  4); memcpy(h + 40, &dataSize,  4);
+  memcpy(h + 36, "data",  4); memcpy(h + 40, &dataSize,   4);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// I2S ADC — microphone input via built-in ADC on GPIO 34
-// The ESP32 I2S ADC mode samples the ADC through DMA — efficient and accurate.
+// INMP441 — I2S input
+// INMP441 sends 24-bit audio left-justified in a 32-bit I2S frame.
 // ─────────────────────────────────────────────────────────────────────────────
 void micStart() {
   i2s_config_t cfg = {};
-  cfg.mode              = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN);
-  cfg.sample_rate       = SAMPLE_RATE;
-  cfg.bits_per_sample   = I2S_BITS_PER_SAMPLE_16BIT;
-  cfg.channel_format    = I2S_CHANNEL_FMT_ONLY_RIGHT;
+  cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
+  cfg.sample_rate          = SAMPLE_RATE;
+  cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_32BIT;  // INMP441 needs 32-bit frame
+  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;  // L/R tied to GND = left
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
-  cfg.intr_alloc_flags  = ESP_INTR_FLAG_LEVEL1;
-  cfg.dma_buf_count     = 4;
-  cfg.dma_buf_len       = 256;
-  cfg.use_apll          = false;
+  cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
+  cfg.dma_buf_count        = 8;
+  cfg.dma_buf_len          = 256;
+  cfg.use_apll             = false;
 
-  i2s_driver_install(I2S_PORT, &cfg, 0, NULL);
-  // ADC1_CHANNEL_6 = GPIO 34
-  // Set 11dB attenuation via Arduino API (0–3.6V input range)
-  analogSetPinAttenuation(MIC_PIN, ADC_11db);
-  i2s_set_adc_mode(ADC_UNIT_1, ADC1_CHANNEL_6);
-  i2s_adc_enable(I2S_PORT);
+  i2s_pin_config_t pins = {};
+  pins.bck_io_num   = MIC_SCK_PIN;
+  pins.ws_io_num    = MIC_WS_PIN;
+  pins.data_in_num  = MIC_SD_PIN;
+  pins.data_out_num = I2S_PIN_NO_CHANGE;
+
+  i2s_driver_install(MIC_PORT, &cfg, 0, NULL);
+  i2s_set_pin(MIC_PORT, &pins);
+  i2s_zero_dma_buffer(MIC_PORT);
 }
 
-void micStop() {
-  i2s_adc_disable(I2S_PORT);
-  i2s_driver_uninstall(I2S_PORT);
-}
+void micStop() { i2s_driver_uninstall(MIC_PORT); }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// I2S DAC — speaker output via built-in DAC on GPIO 25
+// MAX98357A — I2S output
+// Server sends 24 kHz 16-bit signed PCM → play directly via I2S
 // ─────────────────────────────────────────────────────────────────────────────
-void spkStart(int sampleRate = 24000) {
+void spkStart(int rate = 24000) {
   i2s_config_t cfg = {};
-  cfg.mode              = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN);
-  cfg.sample_rate       = (uint32_t)sampleRate;
-  cfg.bits_per_sample   = I2S_BITS_PER_SAMPLE_16BIT;
-  cfg.channel_format    = I2S_CHANNEL_FMT_ONLY_RIGHT;
-  cfg.communication_format = I2S_COMM_FORMAT_STAND_MSB;
-  cfg.intr_alloc_flags  = ESP_INTR_FLAG_LEVEL1;
-  cfg.dma_buf_count     = 8;
-  cfg.dma_buf_len       = 256;
-  cfg.use_apll          = false;
-  cfg.tx_desc_auto_clear = true;
+  cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+  cfg.sample_rate          = (uint32_t)rate;
+  cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
+  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;
+  cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+  cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
+  cfg.dma_buf_count        = 8;
+  cfg.dma_buf_len          = 256;
+  cfg.use_apll             = false;
+  cfg.tx_desc_auto_clear   = true;   // silence on underrun (no pop)
 
-  i2s_driver_install(I2S_PORT, &cfg, 0, NULL);
-  i2s_set_pin(I2S_PORT, NULL);                        // NULL = use internal DAC
-  i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN);         // RIGHT = GPIO 25 = DAC1
-  i2s_zero_dma_buffer(I2S_PORT);
+  i2s_pin_config_t pins = {};
+  pins.bck_io_num   = SPK_BCLK_PIN;
+  pins.ws_io_num    = SPK_LRC_PIN;
+  pins.data_out_num = SPK_DIN_PIN;
+  pins.data_in_num  = I2S_PIN_NO_CHANGE;
+
+  i2s_driver_install(SPK_PORT, &cfg, 0, NULL);
+  i2s_set_pin(SPK_PORT, &pins);
+  i2s_zero_dma_buffer(SPK_PORT);
 }
 
-void spkStop() {
-  i2s_driver_uninstall(I2S_PORT);
-}
+void spkStop() { i2s_driver_uninstall(SPK_PORT); }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Record 3 seconds from mic → fill wavBuf as WAV
-// ADC I2S returns 16-bit unsigned values (12-bit ADC, centered ~2048).
-// We convert to signed 16-bit PCM by subtracting 2048 and scaling.
+// Record from INMP441 → wavBuf (WAV format)
+// INMP441 gives 24-bit data left-justified in 32-bit word.
+// Shift right 11 bits → good 16-bit signed level.
 // ─────────────────────────────────────────────────────────────────────────────
 void recordAudio() {
-  Serial.println("[REC] Recording " + String(RECORD_SECS) + "s ...");
+  Serial.println("[REC] Recording " + String(RECORD_SECS) + "s...");
   digitalWrite(LED_PIN, HIGH);
 
   micStart();
 
-  uint16_t dmaBuf[128];
-  size_t   bytesRead;
-  int      pcmOffset = 0;
+  int32_t dmaBuf[64];
+  size_t  bytesRead;
+  int     offset = 0;
 
-  while (pcmOffset < PCM_BYTES) {
-    int want = min((int)sizeof(dmaBuf), PCM_BYTES - pcmOffset);
-    i2s_read(I2S_PORT, dmaBuf, want, &bytesRead, portMAX_DELAY);
-    int n = bytesRead / 2;
+  while (offset < PCM_BYTES) {
+    i2s_read(MIC_PORT, dmaBuf, sizeof(dmaBuf), &bytesRead, portMAX_DELAY);
+    int samples = bytesRead / 4;
 
-    for (int i = 0; i < n && pcmOffset < PCM_BYTES; i++) {
-      // ADC value: 12-bit unsigned (0–4095), center = 2048
-      // Mask lower 12 bits (upper 4 bits can be channel number)
-      int16_t sample = (int16_t)((dmaBuf[i] & 0x0FFF) - 2048) * 16;
-
-      wavBuf[44 + pcmOffset]     = (uint8_t)(sample & 0xFF);
-      wavBuf[44 + pcmOffset + 1] = (uint8_t)((sample >> 8) & 0xFF);
-      pcmOffset += 2;
+    for (int i = 0; i < samples && offset < PCM_BYTES; i++) {
+      // 24-bit INMP441 data is left-justified in 32-bit → shift right 11 for 16-bit
+      int16_t s = (int16_t)(dmaBuf[i] >> 11);
+      wavBuf[44 + offset]     = (uint8_t)(s & 0xFF);
+      wavBuf[44 + offset + 1] = (uint8_t)((s >> 8) & 0xFF);
+      offset += 2;
     }
   }
 
   micStop();
   buildWAVHeader();
   digitalWrite(LED_PIN, LOW);
-  Serial.printf("[REC] Done — %d bytes captured\n", PCM_BYTES);
+  Serial.printf("[REC] Done — %d bytes PCM\n", PCM_BYTES);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST WAV → /api/stt → transcribed text
+// POST WAV → /api/stt → text
 // ─────────────────────────────────────────────────────────────────────────────
 String transcribe() {
   Serial.println("[STT] Uploading...");
@@ -215,7 +219,8 @@ String chat(const String& msg) {
   Serial.println("[GPT] " + msg);
 
   String esc = msg;
-  esc.replace("\\", "\\\\"); esc.replace("\"", "\\\"");
+  esc.replace("\\", "\\\\");
+  esc.replace("\"", "\\\"");
 
   HTTPClient http;
   http.begin(String(SERVER) + "/api/chat");
@@ -239,17 +244,15 @@ String chat(const String& msg) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST text → /api/tts → stream signed 16-bit PCM (24 kHz) → DAC speaker
-//
-// The server sends signed int16 little-endian PCM.
-// The ESP32 DAC needs unsigned 8-bit values written as uint16 in the upper byte.
-// Conversion: dacOut = ((sample >> 8) + 128) << 8
+// POST text → /api/tts → stream 24 kHz 16-bit PCM → MAX98357A
+// Server returns raw signed int16 little-endian PCM — write directly to I2S
 // ─────────────────────────────────────────────────────────────────────────────
 void speak(const String& text) {
   Serial.println("[TTS] Speaking...");
 
   String esc = text;
-  esc.replace("\\", "\\\\"); esc.replace("\"", "\\\"");
+  esc.replace("\\", "\\\\");
+  esc.replace("\"", "\\\"");
 
   HTTPClient http;
   http.begin(String(SERVER) + "/api/tts");
@@ -262,31 +265,18 @@ void speak(const String& text) {
     http.end(); return;
   }
 
-  spkStart(24000);
+  spkStart(24000);  // 24 kHz matches server PCM output
 
   WiFiClient* stream = http.getStreamPtr();
+  uint8_t buf[512];
+  size_t  written;
 
-  // Read signed int16 PCM from network, convert to DAC uint16 for I2S DAC mode
-  const int CHUNK = 512;
-  uint8_t  netBuf[CHUNK];   // raw bytes from network (pairs of int16 LE)
-  uint16_t dacBuf[CHUNK/2]; // converted samples for DAC
-  size_t   written;
-
+  // Stream PCM directly into I2S DMA — no buffering needed
   while (http.connected() || stream->available()) {
     int avail = stream->available();
     if (avail == 0) { delay(1); continue; }
-
-    int n = stream->readBytes(netBuf, min(avail, CHUNK));
-
-    // Process pairs of bytes → int16 → DAC uint16
-    int samples = n / 2;
-    for (int i = 0; i < samples; i++) {
-      int16_t s = (int16_t)(netBuf[i*2] | (netBuf[i*2+1] << 8));
-      // Shift signed 16-bit to unsigned 8-bit, put in upper byte for DAC
-      dacBuf[i] = (uint16_t)((uint8_t)((s >> 8) + 128)) << 8;
-    }
-
-    i2s_write(I2S_PORT, dacBuf, samples * 2, &written, portMAX_DELAY);
+    int n = stream->readBytes(buf, min(avail, (int)sizeof(buf)));
+    if (n > 0) i2s_write(SPK_PORT, buf, n, &written, portMAX_DELAY);
   }
 
   spkStop();
@@ -295,7 +285,7 @@ void speak(const String& text) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Log conversation to web page via /api/message
+// POST conversation → /api/message (web page display)
 // ─────────────────────────────────────────────────────────────────────────────
 void logMessage(const String& user, const String& bot) {
   String u = user; u.replace("\"", "\\\"");
@@ -316,20 +306,23 @@ void setup() {
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(LED_PIN, OUTPUT);
 
-  Serial.println("\n=== ESP32 Voice Assistant ===");
-  Serial.print("[WiFi] Connecting");
+  Serial.println("\n=== ESP32-S3 Voice Assistant ===");
+  Serial.print("[WiFi] Connecting to ");
+  Serial.println(WIFI_SSID);
+
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   while (WiFi.status() != WL_CONNECTED) {
-    delay(400); Serial.print(".");
+    delay(400);
+    Serial.print(".");
     digitalWrite(LED_PIN, !digitalRead(LED_PIN));
   }
   digitalWrite(LED_PIN, LOW);
-  Serial.println("\n[WiFi] " + WiFi.localIP().toString());
+  Serial.println("\n[WiFi] Connected: " + WiFi.localIP().toString());
   Serial.println("[READY] Press BOOT button to speak.");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main loop
+// Loop — press BOOT button to run one full pipeline turn
 // ─────────────────────────────────────────────────────────────────────────────
 void loop() {
   if (digitalRead(BUTTON_PIN) != LOW) return;
@@ -341,10 +334,16 @@ void loop() {
   recordAudio();
 
   String userText = transcribe();
-  if (!userText.length()) { Serial.println("[ERR] Nothing heard"); return; }
+  if (!userText.length()) {
+    Serial.println("[ERR] Nothing heard");
+    return;
+  }
 
   String botReply = chat(userText);
-  if (!botReply.length()) { Serial.println("[ERR] No reply"); return; }
+  if (!botReply.length()) {
+    Serial.println("[ERR] No reply");
+    return;
+  }
 
   speak(botReply);
   logMessage(userText, botReply);
