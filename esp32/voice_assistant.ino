@@ -56,8 +56,8 @@ const char* SERVER = "https://esp32chatbot.vercel.app";
 
 // ── VAD (Voice Activity Detection) config ─────────────────────────────────────
 #define SAMPLE_RATE       16000
-#define SILENCE_MS        900      // ms of silence → end of speech
-#define MIN_SPEECH_MS     300      // ignore triggers shorter than this (noise)
+#define SILENCE_MS        700      // ms of silence → end of speech
+#define MIN_SPEECH_MS     80       // ignore triggers shorter than this (noise)
 #define MAX_RECORD_SECS   2        // hard cap — ESP32-WROOM DRAM limit (~300KB usable)
 #define COOLDOWN_MS       600      // wait after TTS before listening again
 #define CAL_SECS          1        // seconds to measure noise floor on boot
@@ -198,8 +198,8 @@ void calibrateNoise() {
   }
 
   int avg = (count > 0) ? (int)(sum / count) : 500;
-  // Threshold = 2× average peak + margin, minimum 300
-  VAD_THRESHOLD = max(300, avg * 2 + 200);
+  // Threshold = max noise × 1.5, minimum 400
+  VAD_THRESHOLD = max(400, (int)(maxPeak * 1.5f));
   Serial.printf("[CAL] Avg noise=%d  Max noise=%d  Threshold set=%d\n",
                 avg, maxPeak, VAD_THRESHOLD);
 }
