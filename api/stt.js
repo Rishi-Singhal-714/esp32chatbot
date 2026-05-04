@@ -35,7 +35,8 @@ export default async function handler(req, res) {
 
     res.status(200).json({ text: transcription });
   } catch (err) {
-    console.error("STT:", err.message);
-    res.status(500).json({ error: "Transcription failed" });
+    const detail = err?.message || String(err);
+    console.error("STT error:", detail);
+    res.status(500).json({ error: "Transcription failed", detail });
   }
 }

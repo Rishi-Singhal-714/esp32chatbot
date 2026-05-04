@@ -56,11 +56,14 @@ const char* SERVER = "https://esp32chatbot.vercel.app";
 
 // ── VAD (Voice Activity Detection) config ─────────────────────────────────────
 #define SAMPLE_RATE       16000
-#define VAD_THRESHOLD     800      // amplitude to detect speech  — tune if needed
 #define SILENCE_MS        900      // ms of silence → end of speech
 #define MIN_SPEECH_MS     300      // ignore triggers shorter than this (noise)
 #define MAX_RECORD_SECS   2        // hard cap — ESP32-WROOM DRAM limit (~300KB usable)
 #define COOLDOWN_MS       600      // wait after TTS before listening again
+#define CAL_SECS          1        // seconds to measure noise floor on boot
+
+// Dynamic threshold — set by calibrateNoise() on startup
+static int VAD_THRESHOLD = 1500;   // overwritten by calibration
 
 // ── Buffer ─────────────────────────────────────────────────────────────────────
 #define PCM_BYTES  (SAMPLE_RATE * 2 * MAX_RECORD_SECS)   // 192 000 B
@@ -160,13 +163,39 @@ int readMicChunk() {
   int peak    = 0;
 
   for (int i = 0; i < samples; i++) {
-    int16_t s   = (int16_t)(raw[i] >> 11);
+    // INMP441: 24-bit left-justified in 32-bit frame → take upper 16 bits
+    int16_t s   = (int16_t)(raw[i] >> 16);
     int     amp = abs((int)s);
     if (amp > peak) peak = amp;
     chunkPCM[i * 2]     = (uint8_t)(s & 0xFF);
     chunkPCM[i * 2 + 1] = (uint8_t)((s >> 8) & 0xFF);
   }
   return peak;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Measure ambient noise floor and set VAD_THRESHOLD automatically.
+// Called once in setup() after micStart(), before the greeting.
+// ─────────────────────────────────────────────────────────────────────────────
+void calibrateNoise() {
+  Serial.println("[CAL] Measuring noise floor — stay silent...");
+  long   sum    = 0;
+  int    count  = 0;
+  int    maxPeak = 0;
+  unsigned long end = millis() + (CAL_SECS * 1000);
+
+  while (millis() < end) {
+    int p = readMicChunk();
+    sum  += p;
+    count++;
+    if (p > maxPeak) maxPeak = p;
+  }
+
+  int avg = (count > 0) ? (int)(sum / count) : 500;
+  // Threshold = 2× average peak + margin, minimum 300
+  VAD_THRESHOLD = max(300, avg * 2 + 200);
+  Serial.printf("[CAL] Avg noise=%d  Max noise=%d  Threshold set=%d\n",
+                avg, maxPeak, VAD_THRESHOLD);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,7 +285,7 @@ String transcribe(int pcmBytes) {
   Serial.printf("[STT] HTTP status: %d\n", code);
 
   if (code != 200) {
-    Serial.println("[STT] FAIL — " + http.getString());
+    Serial.println("[STT] FAIL (HTTP " + String(code) + ") — " + http.getString());
     http.end(); return "";
   }
 
@@ -424,7 +453,12 @@ void setup() {
   digitalWrite(LED_PIN, LOW);
   Serial.println("\n[WiFi] " + WiFi.localIP().toString());
 
-  // Greet on startup (mic not running yet — no conflict)
+  // Calibrate noise floor before greeting
+  micStart();
+  calibrateNoise();
+  micStop();
+
+  // Greet on startup
   speak("Hi, I am Zulu bot. How can I help you?");
 
   // Start always-on mic after greeting finishes
