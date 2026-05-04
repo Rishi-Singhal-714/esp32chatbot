@@ -19,7 +19,7 @@
  * │  BCLK →  GPIO 26                        │
  * │  LRC  →  GPIO 27                        │
  * │  DIN  →  GPIO 25                        │
- * │  SD   →  GND                            │
+ * │  SD   →  FLOAT (leave unconnected)      │
  * └─────────────────────────────────────────┘
  *
  * Board  : ESP32S3 Dev Module
@@ -59,7 +59,7 @@ const char* SERVER = "https://esp32chatbot.vercel.app";
 #define SILENCE_MS        700      // ms of silence → end of speech
 #define MIN_SPEECH_MS     80       // ignore triggers shorter than this (noise)
 #define MAX_RECORD_SECS   2        // hard cap — ESP32-WROOM DRAM limit (~300KB usable)
-#define COOLDOWN_MS       600      // wait after TTS before listening again
+#define COOLDOWN_MS       1200     // wait after TTS before listening again
 #define CAL_SECS          1        // seconds to measure noise floor on boot
 
 // Dynamic threshold — set by calibrateNoise() on startup
@@ -133,7 +133,7 @@ void spkStart(int rate = 24000) {
   cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
   cfg.sample_rate          = (uint32_t)rate;
   cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
-  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;
+  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;   // MAX98357A SD=float → stereo avg
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
   cfg.dma_buf_count        = 8;
@@ -197,8 +197,8 @@ void calibrateNoise() {
   }
 
   int avg = (count > 0) ? (int)(sum / count) : 500;
-  // Threshold = max noise × 1.5, minimum 400
-  VAD_THRESHOLD = max(400, (int)(maxPeak * 1.5f));
+  // Threshold = max noise × 2, minimum 1500
+  VAD_THRESHOLD = max(1500, (int)(maxPeak * 2.0f));
   Serial.printf("[CAL] Avg noise=%d  Max noise=%d  Threshold set=%d\n",
                 avg, maxPeak, VAD_THRESHOLD);
 }
@@ -399,15 +399,18 @@ void speak(const String& text) {
   uint8_t buf[512];
   size_t  written;
   int     totalWritten = 0;
-  unsigned long deadline = millis() + 20000;  // 20s max
+  int     remaining    = contentLen;
+  unsigned long deadline = millis() + 40000;  // 40s max for long responses
 
-  while ((http.connected() || stream->available()) && millis() < deadline) {
-    int avail = stream->available();
-    if (avail == 0) { delay(1); continue; }
-    int n = stream->readBytes(buf, min(avail, (int)sizeof(buf)));
+  while (remaining > 0 && millis() < deadline) {
+    int toRead = min((int)sizeof(buf), remaining);
+    int n = stream->readBytes(buf, toRead);
     if (n > 0) {
       i2s_write(SPK_PORT, buf, n, &written, portMAX_DELAY);
       totalWritten += written;
+      remaining -= n;
+    } else if (!http.connected() && stream->available() == 0) {
+      break;
     }
   }
 
