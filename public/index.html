@@ -3,142 +3,215 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ESP32 Assistant</title>
+    <title>Zulu Bot</title>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
 
       body {
         font-family: "Segoe UI", system-ui, sans-serif;
-        background: #0f1117;
+        background: #0a0b0f;
         color: #e0e0e0;
         min-height: 100vh;
         display: flex;
         flex-direction: column;
         align-items: center;
-        padding: 32px 16px;
+        padding: 40px 16px;
       }
 
+      /* ── Header ── */
       header {
         display: flex;
+        flex-direction: column;
         align-items: center;
-        gap: 10px;
-        margin-bottom: 32px;
+        gap: 14px;
+        margin-bottom: 40px;
       }
 
-      .dot {
-        width: 10px;
-        height: 10px;
+      .avatar {
+        width: 64px;
+        height: 64px;
         border-radius: 50%;
-        background: #4caf50;
-        animation: blink 2s infinite;
-      }
-
-      @keyframes blink {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.3; }
+        background: linear-gradient(135deg, #4f8ef7, #7c3aed);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
       }
 
       header h1 {
-        font-size: 1.2rem;
+        font-size: 1.4rem;
+        font-weight: 600;
         color: #fff;
-        font-weight: 500;
+        letter-spacing: -0.02em;
       }
 
-      #feed {
-        width: 100%;
-        max-width: 600px;
+      /* ── Status pill ── */
+      .status-pill {
         display: flex;
-        flex-direction: column;
-        gap: 20px;
-      }
-
-      .card {
+        align-items: center;
+        gap: 7px;
         background: #1a1d27;
         border: 1px solid #2a2d3a;
-        border-radius: 14px;
-        padding: 18px 20px;
-        animation: fadeIn 0.3s ease;
+        border-radius: 999px;
+        padding: 5px 14px;
+        font-size: 0.78rem;
+        color: #aaa;
       }
 
-      @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(8px); }
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #4caf50;
+        animation: breathe 2.4s ease-in-out infinite;
+      }
+
+      @keyframes breathe {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50%       { opacity: 0.4; transform: scale(0.85); }
+      }
+
+      /* ── Feed ── */
+      #feed {
+        width: 100%;
+        max-width: 580px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      /* ── Empty state ── */
+      #empty {
+        text-align: center;
+        margin-top: 48px;
+        color: #333;
+      }
+
+      #empty .mic-icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+        opacity: 0.3;
+      }
+
+      #empty p {
+        font-size: 0.9rem;
+        line-height: 1.8;
+        color: #444;
+      }
+
+      /* ── Conversation card ── */
+      .card {
+        background: #13151f;
+        border: 1px solid #1e2130;
+        border-radius: 16px;
+        overflow: hidden;
+        animation: slideUp 0.3s ease;
+      }
+
+      @keyframes slideUp {
+        from { opacity: 0; transform: translateY(12px); }
         to   { opacity: 1; transform: translateY(0); }
       }
 
-      .label {
-        font-size: 0.7rem;
+      .card-row {
+        display: flex;
+        gap: 12px;
+        padding: 14px 18px;
+        align-items: flex-start;
+      }
+
+      .card-row + .card-row {
+        border-top: 1px solid #1e2130;
+        background: #0f1117;
+      }
+
+      .role-badge {
+        font-size: 0.68rem;
+        font-weight: 600;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
-        margin-bottom: 6px;
+        letter-spacing: 0.07em;
+        padding: 3px 8px;
+        border-radius: 5px;
+        white-space: nowrap;
+        margin-top: 2px;
       }
 
-      .label.user { color: #4f8ef7; }
-      .label.bot  { color: #4caf50; }
+      .role-badge.you {
+        background: #1e3a6e;
+        color: #74a8f7;
+      }
 
-      .text {
-        font-size: 1rem;
+      .role-badge.bot {
+        background: #1a3326;
+        color: #4caf50;
+      }
+
+      .card-text {
+        font-size: 0.93rem;
         line-height: 1.6;
-        color: #e0e0e0;
+        color: #d0d0d0;
+        flex: 1;
       }
 
-      .time {
-        font-size: 0.72rem;
-        color: #444;
-        margin-top: 8px;
-      }
-
-      #empty {
-        color: #444;
-        font-size: 0.9rem;
-        margin-top: 60px;
-        text-align: center;
-        line-height: 1.8;
+      .card-time {
+        font-size: 0.7rem;
+        color: #333;
+        white-space: nowrap;
+        margin-top: 3px;
       }
     </style>
   </head>
   <body>
+
     <header>
-      <div class="dot"></div>
-      <h1>ESP32 Voice Assistant</h1>
+      <div class="avatar">🤖</div>
+      <h1>Zulu Bot</h1>
+      <div class="status-pill">
+        <div class="status-dot"></div>
+        Always listening
+      </div>
     </header>
 
     <div id="feed">
-      <p id="empty">Waiting for ESP32...<br>Press the button on your device to speak.</p>
+      <div id="empty">
+        <div class="mic-icon">🎙️</div>
+        <p>Zulu Bot is live and listening.<br>Just speak — it will respond.</p>
+      </div>
     </div>
 
     <script>
-      const API = "";        // same origin on Vercel
-      const feed = document.getElementById("feed");
-      const empty = document.getElementById("empty");
-      let lastTs = 0;
+      const feed  = document.getElementById("feed");
+      let lastTs  = 0;
 
       async function poll() {
         try {
-          const res = await fetch(`${API}/api/message`);
+          const res  = await fetch("/api/message");
           const { messages } = await res.json();
+          const fresh = (messages || []).filter(m => m.ts > lastTs);
+          if (!fresh.length) return;
 
-          const newMsgs = messages.filter((m) => m.ts > lastTs);
-          if (newMsgs.length === 0) return;
+          document.getElementById("empty")?.remove();
 
-          if (empty) empty.remove();
-
-          newMsgs.forEach((m) => {
+          fresh.forEach(m => {
             lastTs = Math.max(lastTs, m.ts);
+
+            const time = new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
             const card = document.createElement("div");
             card.className = "card";
-
-            const t = new Date(m.ts).toLocaleTimeString();
-
             card.innerHTML = `
-              <div class="label user">You said</div>
-              <div class="text">${esc(m.user)}</div>
-              <div class="label bot" style="margin-top:14px">Assistant replied</div>
-              <div class="text">${esc(m.bot)}</div>
-              <div class="time">${t}</div>`;
+              <div class="card-row">
+                <span class="role-badge you">You</span>
+                <span class="card-text">${esc(m.user)}</span>
+                <span class="card-time">${time}</span>
+              </div>
+              <div class="card-row">
+                <span class="role-badge bot">Zulu</span>
+                <span class="card-text">${esc(m.bot)}</span>
+              </div>`;
 
             feed.appendChild(card);
-            card.scrollIntoView({ behavior: "smooth" });
+            card.scrollIntoView({ behavior: "smooth", block: "end" });
           });
         } catch (_) {}
       }

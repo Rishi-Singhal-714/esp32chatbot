@@ -198,7 +198,7 @@ int listenAndRecord() {
         speechChunks  = 1;
         pcmOffset     = 0;
         digitalWrite(LED_PIN, HIGH);
-        Serial.println("[VAD] Voice — recording");
+        Serial.printf("[VAD] Voice detected — peak=%d — recording\n", peak);
         // Save this first chunk
         memcpy(wavBuf + 44, chunkPCM, CHUNK_BYTES);
         pcmOffset += CHUNK_BYTES;
@@ -253,18 +253,30 @@ String transcribe(int pcmBytes) {
   http.setTimeout(25000);
 
   int code = http.POST(wavBuf, wavBytes);
+  Serial.printf("[STT] HTTP status: %d\n", code);
+
   if (code != 200) {
-    Serial.printf("[STT] HTTP %d\n", code);
+    Serial.println("[STT] FAIL — " + http.getString());
     http.end(); return "";
   }
 
-  StaticJsonDocument<512> doc;
-  deserializeJson(doc, http.getString());
+  String body = http.getString();
   http.end();
+  Serial.println("[STT] Raw response: " + body);
+
+  StaticJsonDocument<512> doc;
+  if (deserializeJson(doc, body)) {
+    Serial.println("[STT] FAIL — JSON parse error");
+    return "";
+  }
 
   String text = doc["text"] | "";
   text.trim();
-  Serial.println("[STT] Heard: " + text);
+  if (text.length() == 0) {
+    Serial.println("[STT] FAIL — empty text in response");
+    return "";
+  }
+  Serial.println("[STT] DONE — Heard: " + text);
   return text;
 }
 
@@ -283,18 +295,30 @@ String chat(const String& msg) {
   http.setTimeout(25000);
 
   int code = http.POST("{\"message\":\"" + esc + "\"}");
+  Serial.printf("[GPT] HTTP status: %d\n", code);
+
   if (code != 200) {
-    Serial.printf("[GPT] HTTP %d\n", code);
+    Serial.println("[GPT] FAIL — " + http.getString());
     http.end(); return "";
   }
 
-  StaticJsonDocument<1024> doc;
-  deserializeJson(doc, http.getString());
+  String body = http.getString();
   http.end();
+  Serial.println("[GPT] Raw response: " + body);
+
+  StaticJsonDocument<1024> doc;
+  if (deserializeJson(doc, body)) {
+    Serial.println("[GPT] FAIL — JSON parse error");
+    return "";
+  }
 
   String reply = doc["reply"] | "";
   reply.trim();
-  Serial.println("[GPT] Reply: " + reply);
+  if (reply.length() == 0) {
+    Serial.println("[GPT] FAIL — empty reply");
+    return "";
+  }
+  Serial.println("[GPT] DONE — Reply: " + reply);
   return reply;
 }
 
@@ -302,7 +326,7 @@ String chat(const String& msg) {
 // POST text → /api/tts → stream PCM → MAX98357A
 // ─────────────────────────────────────────────────────────────────────────────
 void speak(const String& text) {
-  Serial.println("[TTS] Speaking: " + text);
+  Serial.println("[TTS] Requesting: " + text);
   isSpeaking = true;
 
   String esc = text;
@@ -315,32 +339,55 @@ void speak(const String& text) {
   http.setTimeout(25000);
 
   int code = http.POST("{\"text\":\"" + esc + "\"}");
+  Serial.printf("[TTS] HTTP status: %d\n", code);
+
   if (code != 200) {
-    Serial.printf("[TTS] HTTP %d\n", code);
+    Serial.println("[TTS] FAIL — response: " + http.getString());
+    http.end();
+    isSpeaking = false;
+    return;
+  }
+
+  int contentLen = http.getSize();
+  Serial.printf("[TTS] Content-Length: %d bytes\n", contentLen);
+
+  if (contentLen == 0) {
+    Serial.println("[TTS] FAIL — empty audio response");
     http.end();
     isSpeaking = false;
     return;
   }
 
   spkStart(24000);
+  delay(50);  // let MAX98357A I2S clock stabilise before writing
 
   WiFiClient* stream = http.getStreamPtr();
   uint8_t buf[512];
   size_t  written;
+  int     totalWritten = 0;
+  unsigned long deadline = millis() + 20000;  // 20s max
 
-  while (http.connected() || stream->available()) {
+  while ((http.connected() || stream->available()) && millis() < deadline) {
     int avail = stream->available();
     if (avail == 0) { delay(1); continue; }
     int n = stream->readBytes(buf, min(avail, (int)sizeof(buf)));
-    if (n > 0) i2s_write(SPK_PORT, buf, n, &written, portMAX_DELAY);
+    if (n > 0) {
+      i2s_write(SPK_PORT, buf, n, &written, portMAX_DELAY);
+      totalWritten += written;
+    }
   }
 
   spkStop();
   http.end();
 
-  delay(COOLDOWN_MS);   // short pause so mic doesn't pick up speaker echo
+  if (totalWritten > 0) {
+    Serial.printf("[TTS] DONE — %d bytes played\n", totalWritten);
+  } else {
+    Serial.println("[TTS] FAIL — 0 bytes written to I2S");
+  }
+
+  delay(COOLDOWN_MS);
   isSpeaking = false;
-  Serial.println("[TTS] Done");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -377,12 +424,11 @@ void setup() {
   digitalWrite(LED_PIN, LOW);
   Serial.println("\n[WiFi] " + WiFi.localIP().toString());
 
-  // Start mic — stays open the whole time
-  micStart();
-
-  // Greet on startup
+  // Greet on startup (mic not running yet — no conflict)
   speak("Hi, I am Zulu bot. How can I help you?");
 
+  // Start always-on mic after greeting finishes
+  micStart();
   Serial.println("[READY] Always listening...");
 }
 
