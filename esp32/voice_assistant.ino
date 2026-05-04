@@ -76,18 +76,24 @@ static bool     isSpeaking = false;   // blocks mic while TTS is playing
 // WAV header
 // ─────────────────────────────────────────────────────────────────────────────
 void buildWAVHeader(int dataBytes) {
-  int32_t fileSize  = dataBytes + 36;
-  int32_t sr        = SAMPLE_RATE;
-  int32_t byteRate  = sr * 2;
-  int16_t blockAlign = 2, bps = 16, ch = 1, fmt = 1, fmtSz = 16;
-  uint8_t* h = wavBuf;
-  memcpy(h,       "RIFF", 4); memcpy(h +  4, &fileSize,   4);
-  memcpy(h +  8,  "WAVE", 4); memcpy(h + 12, "fmt ",      4);
-  memcpy(h + 16, &fmtSz,  4); memcpy(h + 20, &fmt,        2);
-  memcpy(h + 22, &ch,     2); memcpy(h + 24, &sr,         4);
-  memcpy(h + 28, &byteRate,4); memcpy(h + 32, &blockAlign, 2);
-  memcpy(h + 34, &bps,    2);
-  memcpy(h + 36, "data",  4); memcpy(h + 40, &dataBytes,  4);
+  uint8_t*  h          = wavBuf;
+  uint32_t  fileSize   = (uint32_t)dataBytes + 36;
+  uint32_t  fmtSz      = 16;          // chunk size — must be 4 bytes
+  uint16_t  fmt        = 1;           // PCM
+  uint16_t  ch         = 1;           // mono
+  uint32_t  sr         = SAMPLE_RATE;
+  uint32_t  byteRate   = SAMPLE_RATE * 2;
+  uint16_t  blockAlign = 2;
+  uint16_t  bps        = 16;
+  uint32_t  dataSz     = (uint32_t)dataBytes;
+
+  memcpy(h,      "RIFF",      4); memcpy(h +  4, &fileSize,   4);
+  memcpy(h +  8, "WAVE",      4); memcpy(h + 12, "fmt ",      4);
+  memcpy(h + 16, &fmtSz,      4); memcpy(h + 20, &fmt,        2);
+  memcpy(h + 22, &ch,         2); memcpy(h + 24, &sr,         4);
+  memcpy(h + 28, &byteRate,   4); memcpy(h + 32, &blockAlign, 2);
+  memcpy(h + 34, &bps,        2);
+  memcpy(h + 36, "data",      4); memcpy(h + 40, &dataSz,     4);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
