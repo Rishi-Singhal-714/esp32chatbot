@@ -103,8 +103,8 @@ void micStart() {
   i2s_config_t cfg = {};
   cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
   cfg.sample_rate          = SAMPLE_RATE;
-  cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_32BIT;
-  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_RIGHT;  // INMP441 L/R=GND → right channel
+  cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
+  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;   // INMP441 L/R=GND → left channel
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
   cfg.dma_buf_count        = 8;
@@ -162,15 +162,14 @@ void spkStop() { i2s_driver_uninstall(SPK_PORT); }
 static uint8_t chunkPCM[128];   // 64 samples × 2 bytes — reused every chunk
 
 int readMicChunk() {
-  int32_t raw[64];
+  int16_t raw[64];
   size_t  bytesRead = 0;
   i2s_read(MIC_PORT, raw, sizeof(raw), &bytesRead, portMAX_DELAY);
-  int samples = bytesRead / 4;
+  int samples = bytesRead / 2;
   int peak    = 0;
 
   for (int i = 0; i < samples; i++) {
-    // INMP441: 24-bit left-justified in 32-bit frame → take upper 16 bits
-    int16_t s   = (int16_t)(raw[i] >> 16);
+    int16_t s   = raw[i];
     int     amp = abs((int)s);
     if (amp > peak) peak = amp;
     chunkPCM[i * 2]     = (uint8_t)(s & 0xFF);
@@ -505,5 +504,5 @@ void loop() {
 
   // Restart mic for next utterance
   micStart();
-  Serial.println("[READY] Listening...");
+  Serial.println("[READY2] Listening...");
 }
