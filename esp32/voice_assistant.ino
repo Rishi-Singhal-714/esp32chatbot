@@ -98,7 +98,7 @@ void micStart() {
   cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
   cfg.sample_rate          = SAMPLE_RATE;
   cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_32BIT;
-  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT;
+  cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_RIGHT;  // INMP441 L/R=GND → right channel
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
   cfg.dma_buf_count        = 8;

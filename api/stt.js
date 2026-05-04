@@ -28,7 +28,7 @@ export default async function handler(req, res) {
 
     const transcription = await openai.audio.transcriptions.create({
       file,
-      model: "gpt-4o-transcribe",
+      model: "whisper-1",
       response_format: "text",
       prompt: "Voice command for an ESP32 IoT device assistant.",
     });
