@@ -33,8 +33,8 @@
 #include <driver/i2s.h>
 
 // ── WiFi ──────────────────────────────────────────────────────────────────────
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID = "Crazzysaradar";
+const char* WIFI_PASS = "crazzysardar";
 
 // ── Server ────────────────────────────────────────────────────────────────────
 const char* SERVER = "https://esp32chatbot.vercel.app";
@@ -59,7 +59,7 @@ const char* SERVER = "https://esp32chatbot.vercel.app";
 #define VAD_THRESHOLD     800      // amplitude to detect speech  — tune if needed
 #define SILENCE_MS        900      // ms of silence → end of speech
 #define MIN_SPEECH_MS     300      // ignore triggers shorter than this (noise)
-#define MAX_RECORD_SECS   6        // hard cap on recording length
+#define MAX_RECORD_SECS   2        // hard cap — ESP32-WROOM DRAM limit (~300KB usable)
 #define COOLDOWN_MS       600      // wait after TTS before listening again
 
 // ── Buffer ─────────────────────────────────────────────────────────────────────
@@ -145,84 +145,69 @@ void spkStart(int rate = 24000) {
 void spkStop() { i2s_driver_uninstall(SPK_PORT); }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Read one DMA chunk from mic, return peak amplitude and fill pcm output
-// INMP441: 24-bit left-justified in 32-bit → shift right 11 for int16
+// Read one DMA chunk — always writes into chunkPCM (128 bytes = 64 samples).
+// Returns peak amplitude of the chunk.
 // ─────────────────────────────────────────────────────────────────────────────
-int32_t dmaBuf[64];
+static uint8_t chunkPCM[128];   // 64 samples × 2 bytes — reused every chunk
 
-int readMicChunk(uint8_t* pcmOut, int maxBytes) {
-  size_t bytesRead = 0;
-  i2s_read(MIC_PORT, dmaBuf, sizeof(dmaBuf), &bytesRead, portMAX_DELAY);
+int readMicChunk() {
+  int32_t raw[64];
+  size_t  bytesRead = 0;
+  i2s_read(MIC_PORT, raw, sizeof(raw), &bytesRead, portMAX_DELAY);
   int samples = bytesRead / 4;
-  int peak = 0;
-  int written = 0;
+  int peak    = 0;
 
-  for (int i = 0; i < samples && written < maxBytes; i++) {
-    int16_t s = (int16_t)(dmaBuf[i] >> 11);
-    int amp = abs((int)s);
+  for (int i = 0; i < samples; i++) {
+    int16_t s   = (int16_t)(raw[i] >> 11);
+    int     amp = abs((int)s);
     if (amp > peak) peak = amp;
-
-    if (pcmOut) {
-      pcmOut[written]     = (uint8_t)(s & 0xFF);
-      pcmOut[written + 1] = (uint8_t)((s >> 8) & 0xFF);
-      written += 2;
-    }
+    chunkPCM[i * 2]     = (uint8_t)(s & 0xFF);
+    chunkPCM[i * 2 + 1] = (uint8_t)((s >> 8) & 0xFF);
   }
-  return peak;   // return peak amplitude of this chunk
+  return peak;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Always-on VAD listen loop
-// States: IDLE → wait for voice → RECORDING → silence detected → PROCESSING
+// Always-on VAD — returns PCM bytes recorded into wavBuf+44, or 0 on noise
 // ─────────────────────────────────────────────────────────────────────────────
 int listenAndRecord() {
-  // Returns number of PCM bytes recorded, or 0 if nothing useful captured
+  int  pcmOffset    = 0;
+  bool recording    = false;
+  int  silenceChunks = 0;
+  int  speechChunks  = 0;
 
-  int     pcmOffset     = 0;
-  bool    recording     = false;
-  int     silenceChunks = 0;
-  int     speechChunks  = 0;
-
-  // chunk duration in ms ≈ (64 samples / 16000) * 1000 ≈ 4 ms
-  const int CHUNK_MS        = (64 * 1000) / SAMPLE_RATE;
-  const int SILENCE_CHUNKS  = SILENCE_MS  / CHUNK_MS;
+  const int CHUNK_MS          = (64 * 1000) / SAMPLE_RATE;   // ≈ 4 ms
+  const int SILENCE_CHUNKS    = SILENCE_MS  / CHUNK_MS;
   const int MIN_SPEECH_CHUNKS = MIN_SPEECH_MS / CHUNK_MS;
+  const int CHUNK_BYTES       = 128;
 
   Serial.println("[VAD] Listening...");
   digitalWrite(LED_PIN, LOW);
 
   while (true) {
-    if (isSpeaking) { delay(10); continue; }   // mute mic while TTS plays
+    if (isSpeaking) { delay(10); continue; }
 
-    int remaining = PCM_BYTES - pcmOffset;
-    uint8_t* dest = recording ? (wavBuf + 44 + pcmOffset) : nullptr;
-    int peak = readMicChunk(dest, remaining);
-
-    if (recording && dest) pcmOffset += 128;   // 64 samples × 2 bytes
+    int peak = readMicChunk();   // always fills chunkPCM
 
     if (!recording) {
       if (peak > VAD_THRESHOLD) {
-        // Voice detected — start recording
         recording     = true;
         silenceChunks = 0;
         speechChunks  = 1;
         pcmOffset     = 0;
         digitalWrite(LED_PIN, HIGH);
-        Serial.println("[VAD] Voice detected — recording");
-
-        // Store this first chunk
-        uint8_t* first = wavBuf + 44;
-        int16_t s;
-        int samples = sizeof(dmaBuf) / 4;
-        for (int i = 0; i < samples && pcmOffset < PCM_BYTES; i++) {
-          s = (int16_t)(dmaBuf[i] >> 11);
-          first[pcmOffset]     = (uint8_t)(s & 0xFF);
-          first[pcmOffset + 1] = (uint8_t)((s >> 8) & 0xFF);
-          pcmOffset += 2;
-        }
+        Serial.println("[VAD] Voice — recording");
+        // Save this first chunk
+        memcpy(wavBuf + 44, chunkPCM, CHUNK_BYTES);
+        pcmOffset += CHUNK_BYTES;
       }
     } else {
-      // Already recording
+      // Copy chunk into buffer
+      if (pcmOffset + CHUNK_BYTES <= PCM_BYTES) {
+        memcpy(wavBuf + 44 + pcmOffset, chunkPCM, CHUNK_BYTES);
+        pcmOffset += CHUNK_BYTES;
+      }
+
       if (peak > VAD_THRESHOLD) {
         silenceChunks = 0;
         speechChunks++;
@@ -230,26 +215,21 @@ int listenAndRecord() {
         silenceChunks++;
       }
 
-      // Silence long enough → end of speech
       if (silenceChunks >= SILENCE_CHUNKS) {
         if (speechChunks >= MIN_SPEECH_CHUNKS) {
-          Serial.printf("[VAD] Speech ended — %d bytes captured\n", pcmOffset);
+          Serial.printf("[VAD] Done — %d bytes\n", pcmOffset);
           digitalWrite(LED_PIN, LOW);
           return pcmOffset;
-        } else {
-          // Too short — noise, reset
-          Serial.println("[VAD] Too short, ignoring");
-          recording     = false;
-          pcmOffset     = 0;
-          speechChunks  = 0;
-          silenceChunks = 0;
-          digitalWrite(LED_PIN, LOW);
         }
+        // Too short — reset
+        Serial.println("[VAD] Too short, ignoring");
+        recording = false; pcmOffset = 0;
+        speechChunks = 0;  silenceChunks = 0;
+        digitalWrite(LED_PIN, LOW);
       }
 
-      // Hard cap reached
       if (pcmOffset >= PCM_BYTES) {
-        Serial.println("[VAD] Max length reached");
+        Serial.println("[VAD] Max length");
         digitalWrite(LED_PIN, LOW);
         return pcmOffset;
       }
